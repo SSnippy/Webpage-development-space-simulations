@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>3-Body Gravity Sandbox (Camera Follow)</title>
+  <style>
+    :root {
+      --panel: rgba(10, 14, 24, 0.78);
+      --panel2: rgba(10, 14, 24, 0.55);
+      --text: #d9e2ff;
+      --muted: #98a6d6;
+      --accent: #66d9ff;
+      --danger: #ff6b6b;
+      --border: rgba(160, 190, 255, 0.18);
+    }
+    html, body {
+      margin: 0; height: 100%; overflow: hidden;
+      background: #000;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans", "Helvetica Neue", sans-serif;
+      color: var(--text);
+    }
+    #canvas { position: absolute; inset: 0; }
+    #ui {
+      position: absolute;
+      top: 10px; left: 10px; right: 10px;
+      display: flex; gap: 10px; align-items: stretch;
+      z-index: 10;
+      pointer-events: none;
+    }
+    .card {
+      pointer-events: auto;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+      backdrop-filter: blur(8px);
+      padding: 10px 12px;
+    }
+    #controls {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 170px 1fr 1fr 1fr;
+      gap: 10px 12px;
+      align-items: center;
+      min-width: 980px;
+    }
+    .label { font-size: 12px; color: var(--muted); user-select: none; white-space: nowrap; }
+    .val { font-size: 12px; color: var(--text); user-select: none; white-space: nowrap; text-align: right; }
+    .inline { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+    button {
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+    }
+    button:hover { border-color: rgba(160, 190, 255, 0.35); }
+    button:active { transform: translateY(1px); }
+    .btn-danger { border-color: rgba(255,107,107,0.35); }
+    .btn-danger:hover { border-color: rgba(255,107,107,0.7); }
+
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+    .seg { display: flex; gap: 6px; flex-wrap: wrap; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 10px; border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.05);
+      cursor: pointer; user-select: none;
+      font-size: 12px;
+    }
+    .pill input { margin: 0; }
+    .pill[data-color="s1"] { outline: 1px solid rgba(255, 220, 120, 0.35); }
+    .pill[data-color="s2"] { outline: 1px solid rgba(140, 220, 255, 0.35); }
+    .pill[data-color="s3"] { outline: 1px solid rgba(220, 140, 255, 0.35); }
+    .pill[data-color="p"]  { outline: 1px solid rgba(140, 255, 170, 0.35); }
+
+    #help { max-width: 380px; font-size: 12px; line-height: 1.35; color: var(--muted); }
+    #help b { color: var(--text); }
+
+    #footerHint {
+      position: absolute;
+      bottom: 10px; left: 10px;
+      background: var(--panel2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 8px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      z-index: 9;
+      user-select: none;
+      pointer-events: none;
+    }
+    @media (max-width: 1100px) {
+      #controls { min-width: 0; grid-template-columns: 170px 1fr; }
+      #help { display: none; }
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="canvas"></canvas>
+
+  <div id="ui">
+    <div id="controls" class="card">
+      <div class="label">Simulation</div>
+      <div class="inline">
+        <button id="playBtn">▶ Play</button>
+        <button id="resetBtn" class="btn-danger">↺ Reset</button>
+      </div>
+      <div class="inline">
+        <div class="label">Speed</div>
+        <div class="val" id="speedVal"></div>
+      </div>
+      <div><input id="speed" type="range" min="0" max="300" value="80" /></div>
+
+      <div class="label">Camera</div>
+      <div class="seg">
+        <label class="pill"><input id="followCom" type="checkbox" checked> Follow COM</label>
+        <label class="pill"><input id="autoZoom" type="checkbox" checked> Auto-zoom</label>
+      </div>
+      <div class="inline">
+        <div class="label">Zoom</div>
+        <div class="val" id="zoomVal"></div>
+      </div>
+      <div><input id="zoom" type="range" min="20" max="220" value="100" /></div>
+
+      <div class="label">Place body (click canvas)</div>
+      <div class="seg">
+        <label class="pill" data-color="s1"><input type="radio" name="place" value="s1" checked> Star 1</label>
+        <label class="pill" data-color="s2"><input type="radio" name="place" value="s2"> Star 2</label>
+        <label class="pill" data-color="s3"><input type="radio" name="place" value="s3"> Star 3</label>
+        <label class="pill" data-color="p"><input type="radio" name="place" value="p"> Planet</label>
+      </div>
+      <div class="val" id="massHint"></div>
+      <div></div>
+
+      <div class="label">Star 1 mass</div>
+      <div class="val" id="m1Val"></div>
+      <div><input id="m1" type="range" min="5" max="200" value="80" /></div>
+      <div class="label" style="text-align:right;color:rgba(255,220,120,0.9)">gold</div>
+
+      <div class="label">Star 2 mass</div>
+      <div class="val" id="m2Val"></div>
+      <div><input id="m2" type="range" min="5" max="200" value="80" /></div>
+      <div class="label" style="text-align:right;color:rgba(140,220,255,0.9)">blue</div>
+
+      <div class="label">Star 3 mass</div>
+      <div class="val" id="m3Val"></div>
+      <div><input id="m3" type="range" min="5" max="200" value="80" /></div>
+      <div class="label" style="text-align:right;color:rgba(220,140,255,0.9)">violet</div>
+    </div>
+
+    <div id="help" class="card">
+      <div style="color:var(--text);font-weight:700;margin-bottom:6px;">Controls</div>
+      <div>• Choose a body on top, then <b>click</b> to place it.</div>
+      <div>• <b>Shift + drag</b> from a body to set its initial velocity.</div>
+      <div>• Camera follows center-of-mass; auto-zoom keeps bodies visible.</div>
+      <div style="margin-top:8px;">Integrator: leapfrog (symplectic) + softening.</div>
+    </div>
+  </div>
+
+  <div id="footerHint">
+    Mouse: click to place • Shift+drag to set velocity • Toggle Auto-zoom if you want manual zoom
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+
+  function resize() {
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    canvas.width = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    canvas.style.width = window.innerWidth + "px";
+    canvas.style.height = window.innerHeight + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // CSS pixels
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // UI
+  const playBtn = document.getElementById("playBtn");
+  const resetBtn = document.getElementById("resetBtn");
+  const speedSlider = document.getElementById("speed");
+  const speedVal = document.getElementById("speedVal");
+
+  const followCom = document.getElementById("followCom");
+  const autoZoom = document.getElementById("autoZoom");
+  const zoomSlider = document.getElementById("zoom");
+  const zoomVal = document.getElementById("zoomVal");
+
+  const m1 = document.getElementById("m1");
+  const m2 = document.getElementById("m2");
+  const m3 = document.getElementById("m3");
+  const m1Val = document.getElementById("m1Val");
+  const m2Val = document.getElementById("m2Val");
+  const m3Val = document.getElementById("m3Val");
+  const massHint = document.getElementById("massHint");
+
+  function getPlaceMode() {
+    const el = document.querySelector('input[name="place"]:checked');
+    return el ? el.value : "s1";
+  }
+
+  // ===== World <-> Screen camera =====
+  const camera = {
+    x: 0, y: 0,           // world coords at screen center
+    zoom: 1.0,            // screen = (world - cam) * zoom + center
+    targetX: 0, targetY: 0,
+    targetZoom: 1.0
+  };
+
+  function worldToScreen(wx, wy) {
+    const cx = window.innerWidth / 2;
+    const cy = window.innerHeight / 2;
+    return {
+      x: (wx - camera.x) * camera.zoom + cx,
+      y: (wy - camera.y) * camera.zoom + cy
+    };
+  }
+  function screenToWorld(sx, sy) {
+    const cx = window.innerWidth / 2;
+    const cy = window.innerHeight / 2;
+    return {
+      x: (sx - cx) / camera.zoom + camera.x,
+      y: (sy - cy) / camera.zoom + camera.y
+    };
+  }
+
+  // Smooth camera
+  function smoothCamera(dtReal) {
+    const kPos = 1 - Math.exp(-dtReal * 8);  // smoothing factor
+    const kZoom = 1 - Math.exp(-dtReal * 6);
+    camera.x += (camera.targetX - camera.x) * kPos;
+    camera.y += (camera.targetY - camera.y) * kPos;
+    camera.zoom += (camera.targetZoom - camera.zoom) * kZoom;
+  }
+
+  // ===== Physics =====
+  const G = 1200;
+  const softening = 25;
+  const trailMax = 600;
+  const baseDt = 1 / 240;
+  const maxSubsteps = 12;
+
+  const colors = {
+    s1: "rgba(255, 220, 120, 0.95)",
+    s2: "rgba(140, 220, 255, 0.95)",
+    s3: "rgba(220, 140, 255, 0.95)",
+    p:  "rgba(140, 255, 170, 0.95)"
+  };
+
+  function bodyRadius(mass, isPlanet=false) {
+    if (isPlanet) return 4;
+    return Math.max(8, Math.min(26, Math.sqrt(mass) * 1.8));
+  }
+
+  function makeBody(kind, x, y) {
+    const isPlanet = (kind === "p");
+    return { kind, x, y, vx: 0, vy: 0, mass: isPlanet ? 1.0 : 80.0, trail: [] };
+  }
+
+  let bodies;
+  let paused = true;
+
+  function resetSimulation() {
+    const cx = 0, cy = 0; // world origin at (0,0)
+    bodies = [
+      makeBody("s1", cx - 180, cy),
+      makeBody("s2", cx + 180, cy),
+      makeBody("s3", cx, cy - 180),
+      makeBody("p",  cx, cy + 120),
+    ];
+    bodies[0].vy =  25;
+    bodies[1].vy = -25;
+    bodies[2].vx =  25;
+    bodies[3].vx =  70;
+
+    syncMassFromUI();
+
+    // Start camera looking at origin
+    camera.x = camera.targetX = 0;
+    camera.y = camera.targetY = 0;
+    camera.zoom = camera.targetZoom = 1.0;
+  }
+
+  function syncMassFromUI() {
+    bodies.find(b => b.kind === "s1").mass = Number(m1.value);
+    bodies.find(b => b.kind === "s2").mass = Number(m2.value);
+    bodies.find(b => b.kind === "s3").mass = Number(m3.value);
+    bodies.find(b => b.kind === "p").mass = 1.0;
+
+    m1Val.textContent = `${m1.value}`;
+    m2Val.textContent = `${m2.value}`;
+    m3Val.textContent = `${m3.value}`;
+    massHint.textContent = `planet mass ≈ 1 (tiny)`;
+  }
+  [m1, m2, m3].forEach(sl => sl.addEventListener("input", syncMassFromUI));
+
+  function speedScale() {
+    const v = Number(speedSlider.value);
+    const s = (v === 0) ? 0 : Math.pow(v / 80, 1.6);
+    return Math.min(12, s);
+  }
+  function updateSpeedLabel() {
+    const s = speedScale();
+    speedVal.textContent = (s === 0) ? "0×" : `${s.toFixed(2)}×`;
+  }
+  speedSlider.addEventListener("input", updateSpeedLabel);
+  updateSpeedLabel();
+
+  function manualZoomTarget() {
+    // slider 20..220 => zoom 0.2..2.2
+    return Number(zoomSlider.value) / 100;
+  }
+  function updateZoomLabel() {
+    zoomVal.textContent = `${manualZoomTarget().toFixed(2)}×`;
+  }
+  zoomSlider.addEventListener("input", updateZoomLabel);
+  updateZoomLabel();
+
+  playBtn.addEventListener("click", () => {
+    paused = !paused;
+    playBtn.textContent = paused ? "▶ Play" : "⏸ Pause";
+  });
+  resetBtn.addEventListener("click", () => {
+    paused = true;
+    playBtn.textContent = "▶ Play";
+    resetSimulation();
+  });
+
+  // accelerations
+  const ax = new Array(4), ay = new Array(4);
+
+  function computeAccelerations(outAx, outAy) {
+    for (let i = 0; i < bodies.length; i++) { outAx[i] = 0; outAy[i] = 0; }
+    for (let i = 0; i < bodies.length; i++) {
+      const bi = bodies[i];
+      for (let j = i + 1; j < bodies.length; j++) {
+        const bj = bodies[j];
+        const dx = bj.x - bi.x;
+        const dy = bj.y - bi.y;
+        const r2 = dx*dx + dy*dy + softening*softening;
+        const invR = 1 / Math.sqrt(r2);
+        const invR3 = invR * invR * invR;
+
+        const a_i = G * bj.mass * invR3;
+        const a_j = G * bi.mass * invR3;
+
+        outAx[i] += dx * a_i;
+        outAy[i] += dy * a_i;
+
+        outAx[j] -= dx * a_j;
+        outAy[j] -= dy * a_j;
+      }
+    }
+  }
+
+  function step(dt) {
+    computeAccelerations(ax, ay);
+    for (let i = 0; i < bodies.length; i++) {
+      bodies[i].vx += ax[i] * (dt * 0.5);
+      bodies[i].vy += ay[i] * (dt * 0.5);
+    }
+    for (let i = 0; i < bodies.length; i++) {
+      bodies[i].x += bodies[i].vx * dt;
+      bodies[i].y += bodies[i].vy * dt;
+    }
+    computeAccelerations(ax, ay);
+    for (let i = 0; i < bodies.length; i++) {
+      const b = bodies[i];
+      b.vx += ax[i] * (dt * 0.5);
+      b.vy += ay[i] * (dt * 0.5);
+
+      b.trail.push([b.x, b.y]);
+      if (b.trail.length > trailMax) b.trail.shift();
+    }
+  }
+
+  // ===== Camera target update =====
+  function computeCenterOfMass() {
+    let mx = 0, my = 0, M = 0;
+    for (const b of bodies) {
+      M += b.mass;
+      mx += b.x * b.mass;
+      my += b.y * b.mass;
+    }
+    if (M <= 0) return { x: 0, y: 0 };
+    return { x: mx / M, y: my / M };
+  }
+
+  function computeAutoZoom() {
+    // Find bounding radius from camera target point and choose zoom so all fit.
+    // Use a margin so bodies aren't glued to edges.
+    const margin = 0.18; // 18% padding
+    const w = window.innerWidth * (1 - margin * 2);
+    const h = window.innerHeight * (1 - margin * 2);
+
+    const cx = camera.targetX, cy = camera.targetY;
+    let maxDx = 120, maxDy = 120;
+    for (const b of bodies) {
+      const r = bodyRadius(b.mass, b.kind === "p") + 10;
+      maxDx = Math.max(maxDx, Math.abs(b.x - cx) + r);
+      maxDy = Math.max(maxDy, Math.abs(b.y - cy) + r);
+    }
+
+    const zx = w / (2 * maxDx);
+    const zy = h / (2 * maxDy);
+    // clamp so you can still see trails nicely
+    return Math.max(0.08, Math.min(3.0, Math.min(zx, zy)));
+  }
+
+  // ===== Interaction in world coords =====
+  let drag = null; // {bodyIndex, startWX, startWY, curWX, curWY}
+
+  function findNearestBodyScreen(sx, sy, maxDist=28) {
+    let best = -1, bestD2 = maxDist*maxDist;
+    for (let i = 0; i < bodies.length; i++) {
+      const b = bodies[i];
+      const sp = worldToScreen(b.x, b.y);
+      const r = bodyRadius(b.mass, b.kind === "p") * camera.zoom;
+      const dx = sx - sp.x, dy = sy - sp.y;
+      const d2 = dx*dx + dy*dy;
+      const thresh = Math.max(bestD2, r*r);
+      if (d2 <= thresh) {
+        best = i;
+        bestD2 = d2;
+      }
+    }
+    return best;
+  }
+
+  canvas.addEventListener("mousedown", (e) => {
+    const sx = e.clientX, sy = e.clientY;
+
+    // Shift+drag: set velocity vector
+    if (e.shiftKey) {
+      const idx = findNearestBodyScreen(sx, sy, 45);
+      if (idx !== -1) {
+        const b = bodies[idx];
+        drag = { bodyIndex: idx, startWX: b.x, startWY: b.y, curWX: b.x, curWY: b.y };
+      }
+      return;
+    }
+
+    // Place selected body at clicked world position
+    const w = screenToWorld(sx, sy);
+    const mode = getPlaceMode();
+    const b = bodies.find(bb => bb.kind === mode);
+    b.x = w.x; b.y = w.y;
+    b.trail = [];
+  });
+
+  window.addEventListener("mousemove", (e) => {
+    if (!drag) return;
+    const w = screenToWorld(e.clientX, e.clientY);
+    drag.curWX = w.x;
+    drag.curWY = w.y;
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (!drag) return;
+    const b = bodies[drag.bodyIndex];
+    const dx = (drag.curWX - drag.startWX);
+    const dy = (drag.curWY - drag.startWY);
+    const k = 0.8; // usability scaling in world units
+    b.vx = dx * k;
+    b.vy = dy * k;
+    drag = null;
+  });
+
+  // ===== Space background (parallax) =====
+  const bgStars = [];
+  function regenBackgroundStars() {
+    bgStars.length = 0;
+    const count = Math.floor((window.innerWidth * window.innerHeight) / 4500);
+    for (let i = 0; i < count; i++) {
+      bgStars.push({
+        x: Math.random() * window.innerWidth,
+        y: Math.random() * window.innerHeight,
+        r: Math.random() * 1.6 + 0.2,
+        a: Math.random() * 0.6 + 0.15,
+        depth: Math.random() * 0.9 + 0.1 // parallax factor
+      });
+    }
+  }
+  regenBackgroundStars();
+  window.addEventListener("resize", regenBackgroundStars);
+
+  function drawBackground() {
+    const w = window.innerWidth, h = window.innerHeight;
+    const g = ctx.createRadialGradient(w*0.55, h*0.45, 40, w*0.55, h*0.45, Math.max(w,h)*0.8);
+    g.addColorStop(0, "rgba(25, 30, 60, 0.35)");
+    g.addColorStop(0.55, "rgba(4, 6, 14, 0.95)");
+    g.addColorStop(1, "rgba(0,0,0,1)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    // Parallax: background shifts a bit opposite to camera motion
+    const cx = w/2, cy = h/2;
+    for (const s of bgStars) {
+      const px = s.x - (camera.x * camera.zoom) * 0.003 * s.depth;
+      const py = s.y - (camera.y * camera.zoom) * 0.003 * s.depth;
+
+      ctx.fillStyle = `rgba(255,255,255,${s.a})`;
+      ctx.beginPath();
+      ctx.arc(px, py, s.r, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  function drawTrails() {
+    ctx.lineWidth = 1.4;
+    for (const b of bodies) {
+      const t = b.trail;
+      if (t.length < 2) continue;
+      ctx.strokeStyle = colors[b.kind].replace("0.95", "0.35");
+      ctx.beginPath();
+      const p0 = worldToScreen(t[0][0], t[0][1]);
+      ctx.moveTo(p0.x, p0.y);
+      for (let i = 1; i < t.length; i++) {
+        const p = worldToScreen(t[i][0], t[i][1]);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    }
+  }
+
+  function drawBodies() {
+    for (const b of bodies) {
+      const isPlanet = (b.kind === "p");
+      const rWorld = bodyRadius(b.mass, isPlanet);
+      const r = rWorld * camera.zoom;
+
+      const p = worldToScreen(b.x, b.y);
+
+      const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 2.6);
+      const core = colors[b.kind];
+      grad.addColorStop(0, core);
+      grad.addColorStop(0.35, core.replace("0.95", "0.35"));
+      grad.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r * 2.6, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.fillStyle = core;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(255,255,255,0.18)";
+      ctx.beginPath();
+      ctx.arc(p.x - r*0.25, p.y - r*0.25, Math.max(1.5, r*0.25), 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    if (drag) {
+      const b = bodies[drag.bodyIndex];
+      const p0 = worldToScreen(b.x, b.y);
+      const p1 = worldToScreen(drag.curWX, drag.curWY);
+
+      ctx.strokeStyle = "rgba(255,255,255,0.6)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y);
+      ctx.lineTo(p1.x, p1.y);
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(255,255,255,0.75)";
+      ctx.beginPath();
+      ctx.arc(p1.x, p1.y, 3.5, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  function drawHUD() {
+    ctx.fillStyle = "rgba(10,14,24,0.55)";
+    ctx.fillRect(10, window.innerHeight - 42, 350, 30);
+    ctx.strokeStyle = "rgba(160,190,255,0.18)";
+    ctx.strokeRect(10.5, window.innerHeight - 41.5, 349, 29);
+
+    ctx.fillStyle = "rgba(217,226,255,0.85)";
+    ctx.font = "12px ui-sans-serif, system-ui";
+    ctx.fillText(`Camera: (${camera.x.toFixed(1)}, ${camera.y.toFixed(1)})  Zoom: ${camera.zoom.toFixed(2)}×`, 18, window.innerHeight - 22);
+  }
+
+  // ===== Loop =====
+  let lastTs = performance.now();
+
+  function frame(ts) {
+    const realDt = Math.min(0.05, (ts - lastTs) / 1000);
+    lastTs = ts;
+
+    syncMassFromUI();
+
+    if (!paused) {
+      const s = speedScale();
+      const simDtTotal = realDt * s;
+      if (simDtTotal > 0) {
+        const stepDt = baseDt;
+        const steps = Math.max(1, Math.min(maxSubsteps, Math.ceil(simDtTotal / stepDt)));
+        const dt = simDtTotal / steps;
+        for (let k = 0; k < steps; k++) step(dt);
+      }
+    }
+
+    // Update camera target
+    if (followCom.checked) {
+      const com = computeCenterOfMass();
+      camera.targetX = com.x;
+      camera.targetY = com.y;
+    }
+
+    if (autoZoom.checked) {
+      camera.targetZoom = computeAutoZoom();
+    } else {
+      camera.targetZoom = manualZoomTarget();
+    }
+    updateZoomLabel();
+    smoothCamera(realDt);
+
+    // Draw
+    ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    drawBackground();
+    drawTrails();
+    drawBodies();
+    drawHUD();
+
+    requestAnimationFrame(frame);
+  }
+
+  // init
+  resetSimulation();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Interstellar-ish Black Hole (WebGL2) + Disk + Tidal Disruption</title>
+  <style>
+    :root{
+      --panel: rgba(10, 14, 24, 0.78);
+      --panel2: rgba(10, 14, 24, 0.55);
+      --border: rgba(160, 190, 255, 0.18);
+      --text: #d9e2ff;
+      --muted:#98a6d6;
+      --accent:#66d9ff;
+      --danger:#ff6b6b;
+    }
+    html,body{margin:0;height:100%;overflow:hidden;background:#000;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;color:var(--text);}
+    #gl{position:absolute;inset:0}
+    #overlay{position:absolute;inset:0;pointer-events:none}
+    #ui{
+      position:absolute;top:10px;left:10px;right:10px;z-index:10;
+      display:flex;gap:10px;align-items:stretch;pointer-events:none;
+    }
+    .card{
+      pointer-events:auto;background:var(--panel);
+      border:1px solid var(--border);border-radius:14px;
+      padding:10px 12px;backdrop-filter: blur(8px);
+      box-shadow:0 12px 40px rgba(0,0,0,0.35);
+    }
+    #controls{
+      flex:1;display:grid;
+      grid-template-columns: 160px 1fr 130px 1fr;
+      gap:10px 12px;align-items:center;min-width: 980px;
+    }
+    .label{font-size:12px;color:var(--muted);user-select:none;white-space:nowrap;}
+    .val{font-size:12px;color:var(--text);user-select:none;white-space:nowrap;text-align:right;}
+    input[type="range"]{width:100%;accent-color:var(--accent);}
+    button{
+      background:rgba(255,255,255,0.06);color:var(--text);
+      border:1px solid var(--border);border-radius:12px;
+      padding:10px 12px;font-weight:650;cursor:pointer;user-select:none;
+    }
+    button:hover{border-color:rgba(160,190,255,0.35)}
+    .btn-danger{border-color:rgba(255,107,107,0.35)}
+    .btn-danger:hover{border-color:rgba(255,107,107,0.75)}
+    #help{max-width:360px;font-size:12px;line-height:1.35;color:var(--muted);}
+    #help b{color:var(--text)}
+    #footer{
+      position:absolute;left:10px;bottom:10px;z-index:9;
+      background:var(--panel2);border:1px solid var(--border);
+      border-radius:12px;padding:8px 10px;font-size:12px;color:var(--muted);
+      pointer-events:none;user-select:none;
+    }
+    @media (max-width: 1100px){
+      #controls{min-width:0;grid-template-columns:160px 1fr}
+      #help{display:none}
+    }
+  </style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="overlay"></canvas>
+
+<div id="ui">
+  <div id="controls" class="card">
+    <div class="label">Simulation</div>
+    <div style="display:flex;gap:10px;align-items:center;justify-content:space-between;">
+      <button id="play">▶ Play</button>
+      <button id="reset" class="btn-danger">↺ Reset</button>
+    </div>
+    <div class="label" style="text-align:right;">Speed</div>
+    <div>
+      <div class="val" id="speedVal"></div>
+      <input id="speed" type="range" min="0" max="300" value="95"/>
+    </div>
+
+    <div class="label">Zoom</div>
+    <div>
+      <div class="val" id="zoomVal"></div>
+      <input id="zoom" type="range" min="30" max="280" value="115"/>
+    </div>
+    <div class="label" style="text-align:right;">Quality</div>
+    <div>
+      <div class="val" id="qualVal"></div>
+      <input id="quality" type="range" min="1" max="5" value="3"/>
+    </div>
+
+    <div class="label">BH mass</div>
+    <div>
+      <div class="val" id="mVal"></div>
+      <input id="mass" type="range" min="40" max="240" value="140"/>
+    </div>
+    <div class="label" style="text-align:right;">Disk outer radius</div>
+    <div>
+      <div class="val" id="rOutVal"></div>
+      <input id="rOut" type="range" min="120" max="520" value="340"/>
+    </div>
+
+    <div class="label">Inclination</div>
+    <div>
+      <div class="val" id="incVal"></div>
+      <input id="inc" type="range" min="0" max="85" value="73"/>
+    </div>
+    <div class="label" style="text-align:right;">Accretion rate</div>
+    <div>
+      <div class="val" id="mdotVal"></div>
+      <input id="mdot" type="range" min="1" max="200" value="140"/>
+    </div>
+
+    <div class="label">Planet</div>
+    <div class="label" style="grid-column: span 3;">
+      Click to place planet • Shift+drag to set velocity • It disrupts near Roche limit
+    </div>
+  </div>
+
+  <div id="help" class="card">
+    <div style="color:var(--text);font-weight:750;margin-bottom:6px;">Notes</div>
+    <div>• Disk is <b>emissive</b> (it glows by itself).</div>
+    <div>• Background stars help you see <b>lensing</b> and the BH shadow.</div>
+    <div>• Fix applied: disk plane intersection uses <b>ro + d * t</b> (camera origin), so it actually hits the disk.</div>
+    <div>• For stronger Interstellar vibe: set <b>Inclination 75–85°</b>, <b>Accretion 140–200</b>, <b>Quality 4–5</b>.</div>
+  </div>
+</div>
+
+<div id="footer">Wheel = zoom • Play animates disk • If it’s slow, reduce Quality</div>
+
+<script>
+(() => {
+  const glCanvas = document.getElementById("gl");
+  const ovCanvas = document.getElementById("overlay");
+  const ov = ovCanvas.getContext("2d");
+
+  const ui = id => document.getElementById(id);
+  const playBtn = ui("play");
+  const resetBtn = ui("reset");
+  const speedSl = ui("speed");
+  const zoomSl  = ui("zoom");
+  const qualSl  = ui("quality");
+  const massSl  = ui("mass");
+  const rOutSl  = ui("rOut");
+  const incSl   = ui("inc");
+  const mdotSl  = ui("mdot");
+
+  const speedVal = ui("speedVal");
+  const zoomVal  = ui("zoomVal");
+  const qualVal  = ui("qualVal");
+  const mVal     = ui("mVal");
+  const rOutVal  = ui("rOutVal");
+  const incVal   = ui("incVal");
+  const mdotVal  = ui("mdotVal");
+
+  function speedScale(){
+    const v = +speedSl.value;
+    if (v === 0) return 0;
+    return Math.min(14, Math.pow(v/95, 1.6));
+  }
+  function syncLabels(){
+    speedVal.textContent = `${speedScale().toFixed(2)}×`;
+    zoomVal.textContent  = `${(+zoomSl.value/100).toFixed(2)}×`;
+    const q = +qualSl.value;
+    qualVal.textContent  = ["Low","Med","High","Ultra","Insane"][q-1];
+    mVal.textContent     = `${massSl.value}`;
+    rOutVal.textContent  = `${rOutSl.value}px`;
+    incVal.textContent   = `${incSl.value}°`;
+    mdotVal.textContent  = `${mdotSl.value}`;
+  }
+  [speedSl,zoomSl,qualSl,massSl,rOutSl,incSl,mdotSl].forEach(el => el.addEventListener("input", syncLabels));
+  syncLabels();
+
+  // -------- WebGL2 setup --------
+  const gl = glCanvas.getContext("webgl2", { antialias:false, alpha:false, depth:false, stencil:false });
+  if (!gl) {
+    alert("WebGL2 not available. Try a different browser / enable hardware acceleration.");
+    return;
+  }
+
+  const VERT = `#version 300 es
+  precision highp float;
+  layout(location=0) in vec2 aPos;
+  out vec2 vUv;
+  void main(){
+    vUv = aPos*0.5 + 0.5;
+    gl_Position = vec4(aPos, 0.0, 1.0);
+  }`;
+
+  // IMPORTANT FIX:
+  // Disk intersection now uses ro (camera origin) and final bent direction d:
+  //   tHit = -dot(ro, n) / dot(d, n)
+  //   hit  = ro + d * tHit
+  const FRAG = `#version 300 es
+  precision highp float;
+  in vec2 vUv;
+  out vec4 outColor;
+
+  uniform vec2  uRes;
+  uniform float uTime;
+  uniform float uZoom;
+  uniform float uMass;
+  uniform float uROut;
+  uniform float uInc;
+  uniform float uMdot;
+  uniform int   uSteps;
+  uniform float uGlow;
+
+  float clamp01(float x){ return clamp(x, 0.0, 1.0); }
+  float hash21(vec2 p){
+    p = fract(p*vec2(123.34, 345.45));
+    p += dot(p, p+34.345);
+    return fract(p.x*p.y);
+  }
+
+  vec3 tonemap(vec3 x){
+    x = max(vec3(0.0), x);
+    return (x*(2.51*x + 0.03)) / (x*(2.43*x + 0.59) + 0.14);
+  }
+
+  vec3 diskColor(float T){
+    float t = clamp(T, 0.0, 1.6);
+    vec3 gold  = vec3(1.15, 0.78, 0.25);
+    vec3 white = vec3(1.20, 1.10, 0.95);
+    vec3 orange= vec3(0.95, 0.50, 0.12);
+    vec3 c = mix(orange, gold, clamp01((t-0.15)/0.55));
+    c = mix(c, white, clamp01((t-0.75)/0.75));
+    return c;
+  }
+
+  float rs(){ return uMass * 0.9; }
+  float rin(){ return max(rs()*3.0, rs()*2.6); }
+  float rout(){ return max(uROut, rs()*3.4); }
+
+  float tempProfile(float r){
+    float rIn = rin();
+    float x = max(r, rIn*1.001);
+    float f = max(0.0, 1.0 - sqrt(rIn/x));
+    float T = pow(f/(x*x*x), 0.25);
+    float md = (0.9 + 2.4*(uMdot/200.0));
+    return T*md*120.0;
+  }
+
+  float omega(float r){
+    return 2800.0 / pow(max(r, 1.0), 1.5);
+  }
+
+  float betaAt(float r){
+    float rS = rs();
+    float x = max(r, rS*1.2);
+    float b = sqrt(rS/(2.0*x));
+    return clamp(b, 0.0, 0.72);
+  }
+
+  float gFactor(float r, float cosPsi){
+    float rS = rs();
+    float grav = sqrt(max(0.02, 1.0 - rS/max(r, rS*1.02)));
+    float beta = betaAt(r);
+    float gamma = 1.0/sqrt(max(1e-5, 1.0-beta*beta));
+    float dop = 1.0/(gamma*(1.0 - beta*cosPsi));
+    return grav*dop;
+  }
+
+  float diskPattern(float phi, float r){
+    float rIn = rin();
+    float rOut = rout();
+    float u = (r - rIn) / (rOut - rIn);
+    u = clamp(u, 0.0, 1.0);
+    float innerBias = clamp01(1.2 - 1.3*u);
+
+    float phase = phi + uTime*omega(r);
+    float stripes = 0.5 + 0.5*sin(10.0*phase + 16.0*u);
+    float clumps  = 0.5 + 0.5*sin(3.0*phase - 9.0*u + 0.7*uTime);
+
+    float hot = smoothstep(0.72, 1.00, stripes*clumps);
+    return (0.55 + 0.85*hot*innerBias);
+  }
+
+  vec3 background(vec2 p){
+    float s = 0.0;
+    vec2 q = p*0.012;
+    for(int o=0;o<3;o++){
+      float f = pow(2.0, float(o));
+      vec2 cell = floor(q*f);
+      float r = hash21(cell);
+      float d = hash21(cell+vec2(13.7,19.1));
+      float star = smoothstep(0.985, 0.9996, r) * (0.6+0.4*d) / (1.0+float(o));
+      s += star;
+    }
+    float neb = 0.02 + 0.06*max(0.0, sin((p.x+p.y)*0.0017));
+    // BRIGHTER stars so lensing is visible
+    float v = min(1.0, neb + 2.2*s);
+    return vec3(0.06+0.50*v, 0.07+0.55*v, 0.11+0.72*v);
+  }
+
+  void main(){
+    vec2 frag = vUv*uRes;
+    vec2 uv = (frag - 0.5*uRes) / min(uRes.x, uRes.y);
+    uv /= uZoom;
+
+    // Camera
+    float Z0 = 1200.0;
+    vec3 ro = vec3(0.0, 0.0, Z0);
+    vec3 rd = normalize(vec3(uv, -1.0));
+
+    // Disk plane normal: tilt about X
+    vec3 n = normalize(vec3(0.0, sin(uInc), cos(uInc)));
+
+    // March to bend direction (GPU-friendly approximation)
+    float rS = rs();
+    vec3 p = ro;
+    vec3 d = rd;
+
+    float stepLen = 22.0;
+    float k = 1.35;
+
+    float minR = 1e9;
+
+    for(int i=0;i<220;i++){
+      if (i >= uSteps) break;
+      p += d * stepLen;
+
+      float r = length(p.xy);
+      minR = min(minR, r);
+
+      if (r > 6000.0) break;
+
+      float rr = max(r, rS*1.02);
+      float inv = 1.0/(rr*rr*rr);
+      vec2 axy = -k * rS * p.xy * inv;
+
+      d.xy += axy * stepLen;
+      d = normalize(d);
+
+      if (p.z < -2000.0) break;
+    }
+
+    // Absorption if closest approach dips into horizon
+    bool absorbed = (minR <= rS);
+    vec3 col = vec3(0.0);
+
+    if (absorbed){
+      col = vec3(0.0);
+    } else {
+      // ===== FIX: intersect from ro with direction d (not from marched p) =====
+      float denom = dot(d, n);
+      if (abs(denom) < 1e-6) {
+        // nearly parallel: show background
+        col = background(d.xy * 2000.0);
+      } else {
+        float tHit = -dot(ro, n) / denom;
+        if (tHit <= 0.0) {
+          col = background(d.xy * 2000.0);
+        } else {
+          vec3 hit = ro + d * tHit;
+          float r = length(hit.xy);
+
+          float rIn = rin();
+          float rOut = rout();
+
+          if (r >= rIn && r <= rOut){
+            float phi = atan(hit.y, hit.x);
+
+            float T = tempProfile(r);
+            float mod = diskPattern(phi, r);
+            float Iem = (T*T*T*T) * mod;
+
+            // Doppler geometry
+            vec2 vhat = normalize(vec2(-sin(phi), cos(phi)));
+            vec2 los = normalize(-d.xy + vec2(1e-6, 0.0));
+            float cosPsi = dot(vhat, los) * sin(uInc);
+
+            float g = gFactor(r, cosPsi);
+            float Iobs = Iem * pow(g, 4.0);
+
+            float Tobs = T * g * 0.012;
+            vec3 base = diskColor(Tobs);
+
+            float lum = 1.0 - exp(-Iobs * 0.00000008);
+
+            float innerBoost = smoothstep(rOut, rIn, r) * 0.65 + 0.35;
+
+            col = base * lum * innerBoost * 2.2;
+
+            // glow/halo around the disk edges
+            float halo = exp(-abs(r - rIn) / (rS*0.65)) + 0.35*exp(-abs(r - rOut) / (rS*0.9));
+            col += base * halo * 0.10;
+          } else {
+            // background
+            col = background(d.xy * 2000.0);
+          }
+        }
+      }
+    }
+
+    // Photon ring-ish glow (approx) near closest approach r ~ 1.5 rS
+    float ringR = rS*1.5;
+    float ring = exp(-abs(minR - ringR) / (rS*0.12));
+    col += vec3(1.4, 1.05, 0.45) * ring * uGlow;
+
+    // Horizon edge darkening
+    float edge = smoothstep(rS*1.02, rS*1.30, minR);
+    col *= edge;
+
+    // warm grade
+    col *= vec3(1.08, 1.02, 0.92);
+
+    col = tonemap(col);
+    outColor = vec4(col, 1.0);
+  }`;
+
+  function compile(type, src){
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      const log = gl.getShaderInfoLog(s);
+      gl.deleteShader(s);
+      throw new Error(log);
+    }
+    return s;
+  }
+
+  let prog;
+  try {
+    prog = gl.createProgram();
+    gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
+    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  } catch (e) {
+    console.error(e);
+    alert("Shader compile failed. Open console for details.");
+    return;
+  }
+  gl.useProgram(prog);
+
+  const quad = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+    -1,-1,  1,-1, -1, 1,
+    -1, 1,  1,-1,  1, 1
+  ]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+  const U = {
+    res:  gl.getUniformLocation(prog, "uRes"),
+    time: gl.getUniformLocation(prog, "uTime"),
+    zoom: gl.getUniformLocation(prog, "uZoom"),
+    mass: gl.getUniformLocation(prog, "uMass"),
+    rOut: gl.getUniformLocation(prog, "uROut"),
+    inc:  gl.getUniformLocation(prog, "uInc"),
+    mdot: gl.getUniformLocation(prog, "uMdot"),
+    steps:gl.getUniformLocation(prog, "uSteps"),
+    glow: gl.getUniformLocation(prog, "uGlow"),
+  };
+
+  // -------- Quality mapping --------
+  function qualityToScale(q){
+    return [0.9, 1.0, 1.25, 1.5, 1.75][q-1];
+  }
+  function qualityToSteps(q){
+    return [70, 110, 160, 200, 220][q-1];
+  }
+  function qualityToGlow(q){
+    return [0.06, 0.08, 0.11, 0.14, 0.18][q-1];
+  }
+
+  function resize(){
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    const q = +qualSl.value;
+    const scale = qualityToScale(q);
+
+    const w = Math.floor(innerWidth * dpr * scale);
+    const h = Math.floor(innerHeight * dpr * scale);
+
+    glCanvas.width = w; glCanvas.height = h;
+    glCanvas.style.width = innerWidth + "px";
+    glCanvas.style.height = innerHeight + "px";
+    gl.viewport(0, 0, w, h);
+
+    ovCanvas.width = Math.floor(innerWidth * dpr);
+    ovCanvas.height = Math.floor(innerHeight * dpr);
+    ovCanvas.style.width = innerWidth + "px";
+    ovCanvas.style.height = innerHeight + "px";
+    ov.setTransform(dpr,0,0,dpr,0,0);
+  }
+  addEventListener("resize", resize);
+  qualSl.addEventListener("input", resize);
+  resize();
+
+  // -------- Planet + debris overlay (CPU) --------
+  let paused = true;
+  let simTime = 0;
+
+  const planet = { exists:false, x:420, y:-120, vx:0, vy:220, r:12, rho:80, alive:true, disrupted:false };
+  let debris = [];
+
+  function rS_world(){ return (+massSl.value) * 0.9; }
+  function bhMassProxy(){ return (+massSl.value) * 800; }
+
+  const G = 2200;
+  const soft = 40;
+
+  function accelAt(x,y){
+    const M = bhMassProxy();
+    const r2 = x*x + y*y + soft*soft;
+    const invR = 1/Math.sqrt(r2);
+    const invR3 = invR*invR*invR;
+    return { ax: -G*M*x*invR3, ay: -G*M*y*invR3 };
+  }
+  function stepBody(b, dt){
+    const a1 = accelAt(b.x,b.y);
+    b.vx += a1.ax * (dt*0.5);
+    b.vy += a1.ay * (dt*0.5);
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    const a2 = accelAt(b.x,b.y);
+    b.vx += a2.ax * (dt*0.5);
+    b.vy += a2.ay * (dt*0.5);
+  }
+  function planetMass(){ return planet.rho * (planet.r*planet.r); }
+  function rocheLimit(){
+    const MBH = bhMassProxy();
+    const mp = Math.max(1, planetMass());
+    const factor = 2.2;
+    return factor * planet.r * Math.cbrt(MBH / mp);
+  }
+  function spawnDebris(){
+    debris = [];
+    const n = 140;
+    for (let i=0;i<n;i++){
+      const ang = Math.random()*Math.PI*2;
+      const u = Math.sqrt(Math.random());
+      const px = planet.x + Math.cos(ang)*u*planet.r;
+      const py = planet.y + Math.sin(ang)*u*planet.r;
+      const dx = px, dy = py;
+      const dist = Math.hypot(dx,dy) + 1e-6;
+      const kick = 120 + 260*Math.random();
+      debris.push({
+        x:px,y:py,
+        vx: planet.vx + dx/dist*kick*(0.5+0.7*Math.random()),
+        vy: planet.vy + dy/dist*kick*(0.5+0.7*Math.random()),
+        r: 1.4 + Math.random()*2.6,
+        life:1.0, stretch:0,
+        hue:25 + Math.random()*40
+      });
+    }
+  }
+
+  function worldToScreen(x,y){
+    const z = (+zoomSl.value)/100;
+    return { x: innerWidth/2 + x*z, y: innerHeight/2 + y*z, z };
+  }
+  function screenToWorld(sx,sy){
+    const z = (+zoomSl.value)/100;
+    return { x:(sx-innerWidth/2)/z, y:(sy-innerHeight/2)/z, z };
+  }
+
+  let drag = null;
+  glCanvas.addEventListener("mousedown", (e)=>{
+    const w = screenToWorld(e.clientX, e.clientY);
+
+    if (e.shiftKey && planet.exists && planet.alive && !planet.disrupted){
+      const sp = worldToScreen(planet.x, planet.y);
+      const R = planet.r*sp.z;
+      const dx = e.clientX - sp.x, dy = e.clientY - sp.y;
+      if (dx*dx+dy*dy < (R+20)*(R+20)){
+        drag = { startX: planet.x, startY: planet.y, curX: w.x, curY: w.y };
+      }
+      return;
+    }
+
+    planet.exists = true;
+    planet.alive = true;
+    planet.disrupted = false;
+    planet.x = w.x; planet.y = w.y;
+    planet.vx = 0; planet.vy = 0;
+    debris = [];
+  });
+
+  addEventListener("mousemove",(e)=>{
+    if (!drag) return;
+    const w = screenToWorld(e.clientX, e.clientY);
+    drag.curX = w.x; drag.curY = w.y;
+  });
+
+  addEventListener("mouseup", ()=>{
+    if (!drag) return;
+    const dx = drag.curX - drag.startX;
+    const dy = drag.curY - drag.startY;
+    planet.vx = dx * 0.9;
+    planet.vy = dy * 0.9;
+    drag = null;
+  });
+
+  glCanvas.addEventListener("wheel",(e)=>{
+    e.preventDefault();
+    let z = +zoomSl.value / 100;
+    z *= (1 - e.deltaY*0.0015);
+    z = Math.max(0.3, Math.min(2.8, z));
+    zoomSl.value = Math.round(z*100);
+    syncLabels();
+  }, {passive:false});
+
+  // -------- Controls --------
+  playBtn.onclick = () => {
+    paused = !paused;
+    playBtn.textContent = paused ? "▶ Play" : "⏸ Pause";
+  };
+  resetBtn.onclick = () => {
+    paused = true;
+    simTime = 0;
+    playBtn.textContent = "▶ Play";
+    planet.exists = false;
+    debris = [];
+  };
+
+  // -------- Render loop --------
+  let last = performance.now();
+
+  function frame(now){
+    const realDt = Math.min(0.05, (now-last)/1000);
+    last = now;
+
+    const s = speedScale();
+    if (!paused) simTime += realDt * s;
+
+    // planet/debris physics
+    if (!paused && planet.exists && planet.alive){
+      const simDtTotal = realDt * s;
+      const steps = Math.max(1, Math.min(14, Math.ceil(simDtTotal / (1/240))));
+      const dt = simDtTotal / steps;
+
+      for (let k=0;k<steps;k++){
+        if (planet.exists && planet.alive && !planet.disrupted){
+          stepBody(planet, dt);
+          const r = Math.hypot(planet.x, planet.y);
+          if (r < rocheLimit()){
+            planet.disrupted = true;
+            spawnDebris();
+          }
+          if (r <= rS_world()*1.01) planet.alive = false;
+        }
+        if (debris.length){
+          const rs = rS_world();
+          for (const f of debris){
+            stepBody(f, dt);
+            const r = Math.hypot(f.x,f.y);
+            f.stretch += dt * (800000 / Math.max(1, r*r*r));
+            if (r <= rs*1.02) f.life -= dt*2.2;
+            else f.life -= dt*0.12;
+          }
+          debris = debris.filter(f => f.life > 0);
+        }
+      }
+    }
+
+    // GPU draw
+    gl.useProgram(prog);
+    gl.uniform2f(U.res, glCanvas.width, glCanvas.height);
+    gl.uniform1f(U.time, simTime);
+    gl.uniform1f(U.zoom, (+zoomSl.value)/100);
+    gl.uniform1f(U.mass, (+massSl.value));
+    gl.uniform1f(U.rOut, (+rOutSl.value));
+    gl.uniform1f(U.inc, (+incSl.value) * Math.PI/180);
+    gl.uniform1f(U.mdot, (+mdotSl.value));
+    const q = +qualSl.value;
+    gl.uniform1i(U.steps, qualityToSteps(q));
+    gl.uniform1f(U.glow, qualityToGlow(q));
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+    // overlay
+    ov.clearRect(0,0,innerWidth,innerHeight);
+
+    if (planet.exists && planet.alive && !planet.disrupted){
+      const sp = worldToScreen(planet.x, planet.y);
+      const R = planet.r * sp.z;
+
+      const grad = ov.createRadialGradient(sp.x - R*0.3, sp.y - R*0.3, R*0.2, sp.x, sp.y, R);
+      grad.addColorStop(0, "rgba(220,240,255,0.85)");
+      grad.addColorStop(1, "rgba(40,80,120,0.95)");
+      ov.fillStyle = grad;
+      ov.beginPath(); ov.arc(sp.x, sp.y, R, 0, Math.PI*2); ov.fill();
+      ov.strokeStyle = "rgba(255,255,255,0.25)";
+      ov.lineWidth = 1.1; ov.stroke();
+
+      if (drag){
+        const p1 = worldToScreen(drag.curX, drag.curY);
+        ov.strokeStyle="rgba(255,255,255,0.6)";
+        ov.lineWidth=2;
+        ov.beginPath(); ov.moveTo(sp.x, sp.y); ov.lineTo(p1.x, p1.y); ov.stroke();
+      }
+    }
+
+    if (debris.length){
+      for (const f of debris){
+        const sp = worldToScreen(f.x,f.y);
+        const v = Math.hypot(f.vx,f.vy)+1e-6;
+        const ux = f.vx/v, uy = f.vy/v;
+        const streak = Math.min(26, (2 + f.stretch*0.06) * sp.z);
+
+        ov.strokeStyle = `hsla(${f.hue},95%,65%,${0.55*f.life})`;
+        ov.lineWidth = Math.max(1, (f.r*sp.z)*0.55);
+        ov.beginPath();
+        ov.moveTo(sp.x - ux*streak, sp.y - uy*streak);
+        ov.lineTo(sp.x + ux*streak, sp.y + uy*streak);
+        ov.stroke();
+
+        ov.fillStyle = `hsla(${f.hue},95%,70%,${0.75*f.life})`;
+        ov.beginPath();
+        ov.arc(sp.x, sp.y, Math.max(0.8, f.r*sp.z), 0, Math.PI*2);
+        ov.fill();
+      }
+    }
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

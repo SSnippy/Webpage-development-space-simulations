@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Mario Soma Game</title>
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<style>
+body {
+    margin: 0;
+    background-color: #0B6623;
+}
+</style>
+</head>
+<body>
+
+<div id="plot1" style="width:100%;height:45vh;"></div>
+<div id="plot2" style="width:100%;height:45vh;"></div>
+
+<audio id="jumpSound" src="jump.mp3" preload="auto"></audio>
+
+<script>
+async function loadCSV(file) {
+    const response = await fetch(file);
+    const text = await response.text();
+    const rows = text.trim().split("\n").map(r => r.split(","));
+    rows.shift();
+    return {
+        time: rows.map(r => parseFloat(r[0])),
+        value: rows.map(r => parseFloat(r[1]))
+    };
+}
+
+async function main() {
+
+    const data1 = await loadCSV("soma memb curr.csv");
+    const data2 = await loadCSV("soma Vm.csv");
+
+    const jumpSound = document.getElementById("jumpSound");
+
+    function createPlot(divID, data, titleText, yLabel) {
+
+        const xMin = Math.min(...data.time);
+        const xMax = Math.max(...data.time);
+        const yMin = Math.min(...data.value);
+        const yMax = Math.max(...data.value);
+
+        const xRange = xMax - xMin;
+        const yRange = yMax - yMin;
+
+        Plotly.newPlot(divID, [{
+            x: [],
+            y: [],
+            mode: "lines",
+            line: { color: "#FFD700", width: 6 }
+        }], {
+            title: { text: titleText, font: { color: "white" }},
+            paper_bgcolor: "#0B6623",
+            plot_bgcolor: "#0B6623",
+            xaxis: { title: "Time", color: "white", range: [xMin, xMax] },
+            yaxis: { title: yLabel, color: "white", range: [yMin, yMax] },
+            images: [
+
+                // Mario (moving)
+                {
+                    source: "mario.png",
+                    xref: "x",
+                    yref: "y",
+                    x: data.time[0],
+                    y: data.value[0],
+                    sizex: 0.08 * xRange,
+                    sizey: 0.20 * yRange,
+                    xanchor: "center",
+                    yanchor: "middle",
+                    layer: "above"
+                },
+
+                // Flag pole (static at end)
+                {
+                    source: "pole.png",
+                    xref: "x",
+                    yref: "y",
+                    x: xMax,
+                    y: yMin,
+                    sizex: 0.05 * xRange,
+                    sizey: 0.40 * yRange,
+                    xanchor: "center",
+                    yanchor: "bottom",
+                    layer: "above"
+                }
+
+            ]
+        });
+    }
+
+    createPlot("plot1", data1, "Soma Memb Curr", "Current");
+    createPlot("plot2", data2, "Soma Vm", "Voltage");
+
+    let i = 1;
+    let maxLen = Math.min(data1.time.length, data2.time.length);
+
+    function animate() {
+        if (i >= maxLen) return;
+
+        // Extend waveform
+        Plotly.extendTraces("plot1", {
+            x: [[data1.time[i]]],
+            y: [[data1.value[i]]]
+        }, [0]);
+
+        Plotly.extendTraces("plot2", {
+            x: [[data2.time[i]]],
+            y: [[data2.value[i]]]
+        }, [0]);
+
+        // Move Mario
+        Plotly.relayout("plot1", {
+            "images[0].x": data1.time[i],
+            "images[0].y": data1.value[i]
+        });
+
+        Plotly.relayout("plot2", {
+            "images[0].x": data2.time[i],
+            "images[0].y": data2.value[i]
+        });
+
+        // Detect upward movement (jump trigger)
+        if (data1.value[i] > data1.value[i-1]) {
+            jumpSound.currentTime = 0;
+            jumpSound.play();
+        }
+
+        i++;
+        requestAnimationFrame(animate);
+    }
+
+    animate();
+}
+
+main();
+</script>
+
+</body>
+</html>
